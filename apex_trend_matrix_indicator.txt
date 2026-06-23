@@ -1,0 +1,137 @@
+//@version=6
+indicator("Apex Trend Matrix [Signal Forge]", shorttitle="Apex Trend Matrix", overlay=true, max_lines_count=300, max_labels_count=200)
+
+groupTrend = "Trend Engine"
+fastLen = input.int(21, "Fast EMA", minval=2, group=groupTrend)
+slowLen = input.int(55, "Slow EMA", minval=5, group=groupTrend)
+atrLen = input.int(14, "ATR Length", minval=1, group=groupTrend)
+channelMult = input.float(1.6, "Channel ATR Multiplier", minval=0.1, step=0.1, group=groupTrend)
+biasThreshold = input.float(55.0, "Bias Trigger", minval=10.0, maxval=100.0, step=1.0, group=groupTrend)
+
+groupFilter = "Filters"
+rsiLen = input.int(14, "RSI Length", minval=2, group=groupFilter)
+adxLen = input.int(14, "ADX Length", minval=2, group=groupFilter)
+volumeLen = input.int(20, "Volume Baseline", minval=2, group=groupFilter)
+volumeThreshold = input.float(1.10, "Volume Pulse Threshold", minval=0.60, step=0.05, group=groupFilter)
+
+groupDisplay = "Display"
+showTargets = input.bool(true, "Show Target Ladder", group=groupDisplay)
+ladderBars = input.int(24, "Target Projection Bars", minval=3, maxval=200, group=groupDisplay)
+showDashboard = input.bool(true, "Show Dashboard", group=groupDisplay)
+
+bullCore = color.rgb(0, 214, 170)
+bullGlow = color.rgb(130, 255, 219)
+bearCore = color.rgb(255, 90, 124)
+bearGlow = color.rgb(255, 182, 82)
+neutralCore = color.rgb(114, 126, 148)
+
+f_push_line(array<line> bucket, line item, int keep) =>
+    array.push(bucket, item)
+    if array.size(bucket) > keep
+        line.delete(array.shift(bucket))
+
+f_push_label(array<label> bucket, label item, int keep) =>
+    array.push(bucket, item)
+    if array.size(bucket) > keep
+        label.delete(array.shift(bucket))
+
+src = hlc3
+fast = ta.ema(src, fastLen)
+slow = ta.ema(src, slowLen)
+atr = ta.atr(atrLen)
+upper = slow + atr * channelMult
+lower = slow - atr * channelMult
+rsi = ta.rsi(close, rsiLen)
+adx = ta.adx(adxLen)
+roc = ta.roc(close, 5)
+volumeBase = math.max(ta.sma(volume, volumeLen), 1.0)
+volumePulse = volume / volumeBase
+
+bullScore = 0.0
+bullScore += close > slow ? 22.0 : 0.0
+bullScore += fast > slow ? 18.0 : 0.0
+bullScore += slow > slow[1] ? 14.0 : 0.0
+bullScore += rsi > 52.0 ? math.min((rsi - 52.0) * 1.25, 16.0) : 0.0
+bullScore += adx > 18.0 ? math.min((adx - 18.0) * 0.80, 15.0) : 0.0
+bullScore += volumePulse > 1.0 ? math.min((volumePulse - 1.0) * 18.0, 10.0) : 0.0
+bullScore += roc > 0.0 ? math.min(roc * 1.40, 8.0) : 0.0
+
+bearScore = 0.0
+bearScore += close < slow ? 22.0 : 0.0
+bearScore += fast < slow ? 18.0 : 0.0
+bearScore += slow < slow[1] ? 14.0 : 0.0
+bearScore += rsi < 48.0 ? math.min((48.0 - rsi) * 1.25, 16.0) : 0.0
+bearScore += adx > 18.0 ? math.min((adx - 18.0) * 0.80, 15.0) : 0.0
+bearScore += volumePulse > 1.0 ? math.min((volumePulse - 1.0) * 18.0, 10.0) : 0.0
+bearScore += roc < 0.0 ? math.min(math.abs(roc) * 1.40, 8.0) : 0.0
+
+bias = bullScore - bearScore
+trendColor = bias >= 0.0 ? bullCore : bearCore
+channelColor = bias >= 0.0 ? color.new(bullCore, 84) : color.new(bearCore, 84)
+candleColor = bias > 25.0 ? bullCore : bias < -25.0 ? bearCore : neutralCore
+
+longSignal = bias > biasThreshold and bias[1] <= biasThreshold and close > upper and fast > fast[1] and volumePulse > volumeThreshold
+shortSignal = bias < -biasThreshold and bias[1] >= -biasThreshold and close < lower and fast < fast[1] and volumePulse > volumeThreshold
+
+var array<line> ladders = array.new_line()
+var array<label> markers = array.new_label()
+var table dash = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 55), frame_color=color.new(color.white, 70), frame_width=1)
+
+if longSignal
+    entry = close
+    stop = entry - atr * 1.25
+    target1 = entry + atr * 1.00
+    target2 = entry + atr * 2.00
+    target3 = entry + atr * 3.20
+    if showTargets
+        f_push_line(ladders, line.new(x1=bar_index, y1=entry, x2=bar_index + ladderBars, y2=entry, xloc=xloc.bar_index, color=color.new(color.white, 50), style=line.style_dotted), 60)
+        f_push_line(ladders, line.new(x1=bar_index, y1=stop, x2=bar_index + ladderBars, y2=stop, xloc=xloc.bar_index, color=color.new(bearCore, 0), width=2), 60)
+        f_push_line(ladders, line.new(x1=bar_index, y1=target1, x2=bar_index + ladderBars, y2=target1, xloc=xloc.bar_index, color=color.new(bullGlow, 0), width=2), 60)
+        f_push_line(ladders, line.new(x1=bar_index, y1=target2, x2=bar_index + ladderBars, y2=target2, xloc=xloc.bar_index, color=color.new(bullCore, 0), width=2), 60)
+        f_push_line(ladders, line.new(x1=bar_index, y1=target3, x2=bar_index + ladderBars, y2=target3, xloc=xloc.bar_index, color=color.new(color.aqua, 0), width=2), 60)
+    f_push_label(markers, label.new(x=bar_index, y=low - atr * 0.65, text="A+ LONG\nBias " + str.tostring(bias, "#"), style=label.style_label_up, color=bullGlow, textcolor=color.black, size=size.small), 50)
+
+if shortSignal
+    entry = close
+    stop = entry + atr * 1.25
+    target1 = entry - atr * 1.00
+    target2 = entry - atr * 2.00
+    target3 = entry - atr * 3.20
+    if showTargets
+        f_push_line(ladders, line.new(x1=bar_index, y1=entry, x2=bar_index + ladderBars, y2=entry, xloc=xloc.bar_index, color=color.new(color.white, 50), style=line.style_dotted), 60)
+        f_push_line(ladders, line.new(x1=bar_index, y1=stop, x2=bar_index + ladderBars, y2=stop, xloc=xloc.bar_index, color=color.new(bullCore, 0), width=2), 60)
+        f_push_line(ladders, line.new(x1=bar_index, y1=target1, x2=bar_index + ladderBars, y2=target1, xloc=xloc.bar_index, color=color.new(bearGlow, 0), width=2), 60)
+        f_push_line(ladders, line.new(x1=bar_index, y1=target2, x2=bar_index + ladderBars, y2=target2, xloc=xloc.bar_index, color=color.new(bearCore, 0), width=2), 60)
+        f_push_line(ladders, line.new(x1=bar_index, y1=target3, x2=bar_index + ladderBars, y2=target3, xloc=xloc.bar_index, color=color.new(color.red, 0), width=2), 60)
+    f_push_label(markers, label.new(x=bar_index, y=high + atr * 0.65, text="A+ SHORT\nBias " + str.tostring(bias, "#"), style=label.style_label_down, color=bearGlow, textcolor=color.black, size=size.small), 50)
+
+slowPlot = plot(slow, "Institutional Basis", color=trendColor, linewidth=3)
+fastPlot = plot(fast, "Trigger EMA", color=color.new(trendColor, 15), linewidth=1)
+upperPlot = plot(upper, "Pressure Ceiling", color=color.new(trendColor, 35))
+lowerPlot = plot(lower, "Pressure Floor", color=color.new(trendColor, 35))
+fill(upperPlot, lowerPlot, color=channelColor)
+fill(fastPlot, slowPlot, color=color.new(trendColor, 88))
+
+barcolor(color.new(candleColor, 0))
+plotshape(longSignal, title="Long Burst", style=shape.triangleup, location=location.belowbar, color=bullGlow, size=size.tiny, text="L", textcolor=color.black)
+plotshape(shortSignal, title="Short Burst", style=shape.triangledown, location=location.abovebar, color=bearGlow, size=size.tiny, text="S", textcolor=color.black)
+
+if barstate.islast and showDashboard
+    regimeText = bias > biasThreshold ? "Expansion Long" : bias < -biasThreshold ? "Expansion Short" : bias > 0.0 ? "Bull Coil" : "Bear Coil"
+    table.cell(dash, 0, 0, "APEX TREND", text_color=color.white, bgcolor=color.new(color.black, 0))
+    table.cell(dash, 1, 0, regimeText, text_color=trendColor, bgcolor=color.new(color.black, 0))
+    table.cell(dash, 0, 1, "Bias", text_color=color.white)
+    table.cell(dash, 1, 1, str.tostring(bias, "#.0"), text_color=trendColor)
+    table.cell(dash, 0, 2, "RSI / ADX", text_color=color.white)
+    table.cell(dash, 1, 2, str.tostring(rsi, "#.0") + " / " + str.tostring(adx, "#.0"), text_color=color.white)
+    table.cell(dash, 0, 3, "Vol Pulse", text_color=color.white)
+    table.cell(dash, 1, 3, str.tostring(volumePulse, "#.00") + "x", text_color=volumePulse > volumeThreshold ? bullGlow : neutralCore)
+    table.cell(dash, 0, 4, "Channel", text_color=color.white)
+    table.cell(dash, 1, 4, close > upper ? "Breakout" : close < lower ? "Breakdown" : "Inside", text_color=close > upper ? bullGlow : close < lower ? bearGlow : neutralCore)
+    table.cell(dash, 0, 5, "Trigger", text_color=color.white)
+    table.cell(dash, 1, 5, longSignal ? "Fresh Long" : shortSignal ? "Fresh Short" : "Waiting", text_color=longSignal ? bullGlow : shortSignal ? bearGlow : neutralCore)
+
+if barstate.islast and not showDashboard
+    for row = 0 to 5
+        table.cell(dash, 0, row, "", bgcolor=color.new(color.black, 100))
+        table.cell(dash, 1, row, "", bgcolor=color.new(color.black, 100))
